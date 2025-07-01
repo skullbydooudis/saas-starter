@@ -24,7 +24,7 @@ function question(query: string): Promise<string> {
 
 async function checkStripeCLI() {
   console.log(
-    'Step 1: Checking if Stripe CLI is installed and authenticated...'
+    'Step 1: Checking if Stripe CLI is available...'
   );
   try {
     await execAsync('stripe --version');
@@ -34,6 +34,7 @@ async function checkStripeCLI() {
     try {
       await execAsync('stripe config --list');
       console.log('Stripe CLI is authenticated.');
+      return true;
     } catch (error) {
       console.log(
         'Stripe CLI is not authenticated or the authentication has expired.'
@@ -44,36 +45,29 @@ async function checkStripeCLI() {
       );
       if (answer.toLowerCase() !== 'y') {
         console.log(
-          'Please authenticate with Stripe CLI and run this script again.'
+          'Continuing without Stripe CLI authentication. You can set up webhooks manually.'
         );
-        process.exit(1);
+        return false;
       }
 
       // Verify authentication after user confirms login
       try {
         await execAsync('stripe config --list');
         console.log('Stripe CLI authentication confirmed.');
+        return true;
       } catch (error) {
         console.error(
-          'Failed to verify Stripe CLI authentication. Please try again.'
+          'Failed to verify Stripe CLI authentication. Continuing without CLI.'
         );
-        process.exit(1);
+        return false;
       }
     }
   } catch (error) {
-    console.error(
-      'Stripe CLI is not installed. Please install it and try again.'
-    );
-    console.log('To install Stripe CLI, follow these steps:');
-    console.log('1. Visit: https://docs.stripe.com/stripe-cli');
     console.log(
-      '2. Download and install the Stripe CLI for your operating system'
+      'Stripe CLI is not available in this environment. This is normal for WebContainer/browser environments.'
     );
-    console.log('3. After installation, run: stripe login');
-    console.log(
-      'After installation and authentication, please run this setup script again.'
-    );
-    process.exit(1);
+    console.log('You can set up webhooks manually later if needed.');
+    return false;
   }
 }
 
@@ -155,26 +149,46 @@ async function getStripeSecretKey(): Promise<string> {
   return await question('Enter your Stripe Secret Key: ');
 }
 
-async function createStripeWebhook(): Promise<string> {
-  console.log('Step 4: Creating Stripe webhook...');
-  try {
-    const { stdout } = await execAsync('stripe listen --print-secret');
-    const match = stdout.match(/whsec_[a-zA-Z0-9]+/);
-    if (!match) {
-      throw new Error('Failed to extract Stripe webhook secret');
-    }
-    console.log('Stripe webhook created.');
-    return match[0];
-  } catch (error) {
-    console.error(
-      'Failed to create Stripe webhook. Check your Stripe CLI installation and permissions.'
-    );
-    if (os.platform() === 'win32') {
-      console.log(
-        'Note: On Windows, you may need to run this script as an administrator.'
+async function createStripeWebhook(hasStripeCLI: boolean): Promise<string> {
+  if (hasStripeCLI) {
+    console.log('Step 4: Creating Stripe webhook with CLI...');
+    try {
+      const { stdout } = await execAsync('stripe listen --print-secret');
+      const match = stdout.match(/whsec_[a-zA-Z0-9]+/);
+      if (!match) {
+        throw new Error('Failed to extract Stripe webhook secret');
+      }
+      console.log('Stripe webhook created.');
+      return match[0];
+    } catch (error) {
+      console.error(
+        'Failed to create Stripe webhook with CLI. Falling back to manual setup.'
       );
+      return await getManualWebhookSecret();
     }
-    throw error;
+  } else {
+    return await getManualWebhookSecret();
+  }
+}
+
+async function getManualWebhookSecret(): Promise<string> {
+  console.log('Step 4: Manual Stripe webhook setup');
+  console.log('Since Stripe CLI is not available, you can set up webhooks manually:');
+  console.log('1. Go to https://dashboard.stripe.com/test/webhooks');
+  console.log('2. Click "Add endpoint"');
+  console.log('3. Set the endpoint URL to: http://localhost:3000/api/stripe/webhook');
+  console.log('4. Select the events you want to listen for (e.g., checkout.session.completed)');
+  console.log('5. Click "Add endpoint"');
+  console.log('6. Copy the webhook signing secret (starts with whsec_)');
+  console.log('');
+  
+  const useWebhook = await question('Do you want to set up a webhook secret now? (y/n): ');
+  
+  if (useWebhook.toLowerCase() === 'y') {
+    return await question('Enter your Stripe Webhook Secret (whsec_...): ');
+  } else {
+    console.log('Skipping webhook setup. You can add STRIPE_WEBHOOK_SECRET to your .env file later.');
+    return 'your_webhook_secret_here';
   }
 }
 
@@ -194,11 +208,11 @@ async function writeEnvFile(envVars: Record<string, string>) {
 }
 
 async function main() {
-  await checkStripeCLI();
+  const hasStripeCLI = await checkStripeCLI();
 
   const POSTGRES_URL = await getPostgresURL();
   const STRIPE_SECRET_KEY = await getStripeSecretKey();
-  const STRIPE_WEBHOOK_SECRET = await createStripeWebhook();
+  const STRIPE_WEBHOOK_SECRET = await createStripeWebhook(hasStripeCLI);
   const BASE_URL = 'http://localhost:3000';
   const AUTH_SECRET = generateAuthSecret();
 
@@ -211,6 +225,12 @@ async function main() {
   });
 
   console.log('🎉 Setup completed successfully!');
+  
+  if (!hasStripeCLI && STRIPE_WEBHOOK_SECRET === 'your_webhook_secret_here') {
+    console.log('');
+    console.log('⚠️  Remember to update your STRIPE_WEBHOOK_SECRET in the .env file');
+    console.log('   after setting up your webhook endpoint in the Stripe dashboard.');
+  }
 }
 
 main().catch(console.error);
