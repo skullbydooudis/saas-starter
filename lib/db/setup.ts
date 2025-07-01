@@ -71,8 +71,45 @@ async function checkStripeCLI() {
   }
 }
 
+async function isDockerAvailable(): Promise<boolean> {
+  try {
+    await execAsync('docker --version');
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 async function getPostgresURL(): Promise<string> {
   console.log('Step 2: Setting up Postgres');
+  
+  const dockerAvailable = await isDockerAvailable();
+  
+  if (!dockerAvailable) {
+    console.log('Docker is not available in this environment (WebContainer/browser).');
+    console.log('For database options in this environment, you can use:');
+    console.log('1. Remote Postgres database (recommended)');
+    console.log('2. SQLite (for development/testing)');
+    console.log('');
+    console.log('Popular remote Postgres providers:');
+    console.log('- Supabase: https://supabase.com/');
+    console.log('- Neon: https://neon.tech/');
+    console.log('- Vercel Postgres: https://vercel.com/storage/postgres');
+    console.log('- Railway: https://railway.app/');
+    console.log('');
+    
+    const dbChoice = await question(
+      'Do you want to use a remote Postgres instance (R) or SQLite for development (S)? (R/S): '
+    );
+    
+    if (dbChoice.toLowerCase() === 's') {
+      console.log('Using SQLite for development...');
+      return 'file:./dev.db';
+    } else {
+      return await question('Enter your POSTGRES_URL: ');
+    }
+  }
+  
   const dbChoice = await question(
     'Do you want to use a local Postgres instance with Docker (L) or a remote Postgres instance (R)? (L/R): '
   );
@@ -90,20 +127,6 @@ async function getPostgresURL(): Promise<string> {
 }
 
 async function setupLocalPostgres() {
-  console.log('Checking if Docker is installed...');
-  try {
-    await execAsync('docker --version');
-    console.log('Docker is installed.');
-  } catch (error) {
-    console.error(
-      'Docker is not installed. Please install Docker and try again.'
-    );
-    console.log(
-      'To install Docker, visit: https://docs.docker.com/get-docker/'
-    );
-    process.exit(1);
-  }
-
   console.log('Creating docker-compose.yml file...');
   const dockerComposeContent = `
 services:
@@ -230,6 +253,12 @@ async function main() {
     console.log('');
     console.log('⚠️  Remember to update your STRIPE_WEBHOOK_SECRET in the .env file');
     console.log('   after setting up your webhook endpoint in the Stripe dashboard.');
+  }
+  
+  if (POSTGRES_URL === 'file:./dev.db') {
+    console.log('');
+    console.log('📝 Note: You are using SQLite for development.');
+    console.log('   For production, consider using a remote Postgres database.');
   }
 }
 
